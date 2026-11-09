@@ -7,6 +7,11 @@ A native iPad app version of the reader, with an on-device AI (Gemma 4 E2B via l
 - `Models/gemma-4-E2B-it-Q4_0.gguf` (2.8 GB): https://huggingface.co/ggml-org/gemma-4-E2B-it-GGUF
 - `brew install xcodegen`, then `xcodegen generate` to make `Reading.xcodeproj`.
 
+## Building it yourself
+Set your own Apple team and bundle ID in `project.yml` (`DEVELOPMENT_TEAM`, `bundleIdPrefix` and
+`PRODUCT_BUNDLE_IDENTIFIER`), then run `xcodegen generate`. A free Apple ID works for a 7-day install;
+the increased-memory entitlements may need a paid developer account.
+
 ## Install on the iPad
 1. Plug the iPad in, tap Trust, turn on Settings → Privacy & Security → Developer Mode.
 2. Build & install: `xcodebuild -project Reading.xcodeproj -scheme Reading -destination 'platform=iOS,id=<UDID>' -allowProvisioningUpdates build`
