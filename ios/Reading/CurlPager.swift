@@ -13,6 +13,7 @@ struct CurlPager: UIViewControllerRepresentable {
     let two: Bool
     let rtl: Bool
     let compact: Bool                   // artwork: smaller margins, no page numbers
+    var spineGap: CGFloat? = nil        // space each page keeps from the spine (the fold on a foldable)
     @Binding var spread: Int?           // logical spread index (reading order)
     let renderer: PageRenderer
     let dark: Bool
@@ -92,7 +93,8 @@ struct CurlPager: UIViewControllerRepresentable {
         func make(slot v: Int) -> PageSlotController {
             let side: PageSlotController.Side = parent.two ? (v % 2 == 0 ? .left : .right) : .single
             let vc = PageSlotController(slot: v, page: parent.page(forVirtualSlot: v), total: parent.total,
-                                        renderer: parent.renderer, side: side, compact: parent.compact)
+                                        renderer: parent.renderer, side: side, compact: parent.compact,
+                                        spineGap: parent.spineGap)
             vc.restyle(dark: parent.dark, invert: parent.invert, aspect: parent.aspect)
             vc.zoom = container?.zoomScale ?? 1
             return vc
@@ -251,6 +253,7 @@ final class PageSlotController: UIViewController {
     let renderer: PageRenderer
     let side: Side
     let compact: Bool
+    let foldGap: CGFloat?
 
     private var dark = true
     private var invert = true
@@ -264,13 +267,14 @@ final class PageSlotController: UIViewController {
     private var lastKey = ""
     private var renderTask: Task<Void, Never>?
 
-    init(slot: Int, page: Int?, total: Int, renderer: PageRenderer, side: Side, compact: Bool) {
+    init(slot: Int, page: Int?, total: Int, renderer: PageRenderer, side: Side, compact: Bool, spineGap: CGFloat? = nil) {
         self.slot = slot
         self.page = page
         self.total = total
         self.renderer = renderer
         self.side = side
         self.compact = compact
+        self.foldGap = spineGap
         super.init(nibName: nil, bundle: nil)
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -314,8 +318,9 @@ final class PageSlotController: UIViewController {
         guard b.width > 1, b.height > 1 else { return }
         let top: CGFloat = compact ? 10 : 44
         let bottom: CGFloat = compact ? 14 : 54
-        let outer: CGFloat = compact ? 8 : (b.width < 420 ? 12 : 56)
-        let spineGap: CGFloat = compact ? 0 : 6
+        let outer: CGFloat = compact ? 8 : (b.width < 520 ? 16 : 56)   // phone-size screens get small margins
+        // On a foldable, keep the pages clear of the fold.
+        let spineGap: CGFloat = foldGap.map { max($0, compact ? 0 : 6) } ?? (compact ? 0 : 6)
         let availH = b.height - top - bottom
         let availW = side == .single ? b.width - outer * 2 : b.width - outer - spineGap
         let ph = max(1, min(availH, availW / aspect)).rounded(.down)

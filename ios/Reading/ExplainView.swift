@@ -65,9 +65,9 @@ struct ExplainView: View {
             .padding(.horizontal, 18).padding(.top, 18).padding(.bottom, 8)
 
             if !LocalLLM.isAvailable {
-                notice("The AI runs on your iPad itself. It isn’t available in the simulator.")
+                notice("The AI runs on the device itself. It isn’t available in the simulator.")
             } else if LocalLLM.findModel() == nil {
-                notice("The AI model isn’t on this device yet. Connect the iPad to your Mac and copy the .gguf model into Reading’s Models folder (Finder → iPad → Files → Reading).")
+                notice("The AI model isn’t on this device yet. Connect it to your Mac and copy the .gguf model into Reading’s Models folder (Finder → your device → Files → Reading).")
             } else {
                 memoryStatus
                 actions
@@ -126,7 +126,7 @@ struct ExplainView: View {
     }
 
     private var intro: some View {
-        Text("Tap a button above or ask anything about this page: who someone is, what just happened, what a word means. You can ask follow-up questions. Everything runs on this iPad, no internet needed.")
+        Text("Tap a button above or ask anything about this page: who someone is, what just happened, what a word means. You can ask follow-up questions. Everything runs on this device, no internet needed.")
             .font(.subheadline).foregroundStyle(.secondary)
     }
 

@@ -67,12 +67,14 @@ struct ReaderView: View {
 
     var body: some View {
         GeometryReader { geo in
-            let two = geo.size.width > geo.size.height * 1.05 && geo.size.width >= 700
+            let fold = Self.verticalFold(geo)
+            // On a foldable (iPhone Duo) the fold becomes the spine of the book.
+            let two = fold != nil || (geo.size.width > geo.size.height * 1.05 && geo.size.width >= 700)
             ZStack {
                 Color(darkPages ? .black : UIColor(red: 0.95, green: 0.945, blue: 0.93, alpha: 1)).ignoresSafeArea()
 
                 if ready {
-                    pager(size: geo.size)
+                    pager(size: geo.size, spineGap: fold.map { $0.width / 2 })
                 }
 
                 header
@@ -121,6 +123,10 @@ struct ReaderView: View {
             if let doc {
                 ExplainView(title: book.title, kind: kind, doc: doc, pages: visible, memory: memory)
                     .inspectorColumnWidth(min: 320, ideal: 380, max: 480)
+                    // On a phone this is a sheet: open halfway so the page stays in view.
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
+                    .presentationBackgroundInteraction(.enabled(upThrough: .medium))
             }
         }
         .preferredColorScheme(darkPages ? .dark : .light)
@@ -128,12 +134,24 @@ struct ReaderView: View {
 
     // MARK: Pages
 
-    private func pager(size: CGSize) -> some View {
-        CurlPager(total: total, two: spreadMode, rtl: rtl, compact: artwork, spread: $spreadIndex,
+    /// The fold of a foldable iPhone when it runs top to bottom down the middle of
+    /// the screen (the phone held open like a book). Nil on other devices.
+    static func verticalFold(_ geo: GeometryProxy) -> CGRect? {
+        guard #available(iOS 27.1, *) else { return nil }
+        let w = geo.size.width
+        return geo.reservedRegions(kind: .division)
+            .filter { $0.isActive }
+            .map(\.frame)
+            .first { $0.height > $0.width && $0.height >= geo.size.height * 0.8 && abs($0.midX - w / 2) < w * 0.05 }
+    }
+
+    private func pager(size: CGSize, spineGap: CGFloat?) -> some View {
+        CurlPager(total: total, two: spreadMode, rtl: rtl, compact: artwork, spineGap: spreadMode ? spineGap : nil,
+                  spread: $spreadIndex,
                   renderer: renderer, dark: darkPages, invert: kind.invertsInDarkMode, aspect: aspect) { x in
             tap(atFraction: rtl ? 1 - x : x)
         }
-        .id("\(spreadMode)-\(kind.rawValue)") // spine and direction are fixed when the pager is created
+        .id("\(spreadMode)-\(kind.rawValue)-\(Int(spineGap ?? -1))") // spine, gap and direction are fixed when the pager is created
             .ignoresSafeArea()
     }
 
@@ -191,6 +209,8 @@ struct ReaderView: View {
                 .opacity(showUI || artwork ? 0 : 1)
             Spacer()
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .ignoresSafeArea(edges: .horizontal)   // the status bar is hidden, so use its space
         .allowsHitTesting(false)
     }
 
@@ -214,7 +234,7 @@ struct ReaderView: View {
             }
             .frame(height: 2)
         }
-        .ignoresSafeArea(edges: .bottom)
+        .ignoresSafeArea(edges: [.bottom, .horizontal])
         .allowsHitTesting(false)
     }
 
@@ -276,6 +296,7 @@ struct ReaderView: View {
             .padding(.bottom, 14)
             .padding(.horizontal, 16)
         }
+        .ignoresSafeArea(edges: .horizontal)
     }
 
     private var scrubLabel: String {

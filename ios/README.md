@@ -1,6 +1,6 @@
-# Reading for iPad
+# Reading for iPad and iPhone
 
-A native iPad app version of the reader, with an on-device AI (Gemma 4 E2B via llama.cpp) that explains pages offline.
+A native iPad and iPhone app version of the reader, with an on-device AI (Gemma 4 E2B via llama.cpp) that explains pages offline.
 
 ## One-time setup (not in git — too big)
 - `Vendor/build-apple/llama.xcframework`: from the llama.cpp release `b12211` asset `llama-b12211-xcframework.zip`.
@@ -21,6 +21,7 @@ the increased-memory entitlements may need a paid developer account.
    (Or Finder → iPad → Files → Reading, drag the .gguf in.)
 
 ## Notes
+- iPhone Duo: unfolded, the reader shows two pages with the fold as the book's spine (it reads the fold position from `reservedRegions(kind: .division)`, iOS 27.1+). Folded, the outer screen shows one page.
 - The iPad Pro 2020 (A12Z) GPU is too old for llama.cpp's GPU path, so the model runs on the CPU (`GGML_METAL_DEVICES=0`).
 - The llama.cpp framework has no simulator build: in the simulator the app works but the Explain panel says the AI isn't available.
 - Debug launch options: `-importPath <pdf>`, `-openFirst YES`, `-startPage N`, `-showExplain YES`, `-showUI YES`.
