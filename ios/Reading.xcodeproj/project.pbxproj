@@ -159,7 +159,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "if [ \"$PLATFORM_NAME\" = \"iphoneos\" ]; then\n  SRC=\"$SRCROOT/Vendor/build-apple/llama.xcframework/ios-arm64/llama.framework\"\n  DST=\"$TARGET_BUILD_DIR/$FRAMEWORKS_FOLDER_PATH\"\n  mkdir -p \"$DST\"\n  rsync -a --delete \"$SRC\" \"$DST/\"\n  if [ -n \"$EXPANDED_CODE_SIGN_IDENTITY\" ]; then\n    codesign --force --sign \"$EXPANDED_CODE_SIGN_IDENTITY\" --preserve-metadata=identifier,flags --timestamp=none \"$DST/llama.framework\"\n  fi\nfi\n";
+			shellScript = "if [ \"$PLATFORM_NAME\" = \"iphoneos\" ]; then\n  SRC=\"$SRCROOT/Vendor/build-apple/llama.xcframework/ios-arm64/llama.framework\"\n  DST=\"$TARGET_BUILD_DIR/$FRAMEWORKS_FOLDER_PATH\"\n  # Copy and sign only when the library is new or changed: redoing it on every\n  # build alters the app after it was signed and breaks its signature.\n  if [ ! -f \"$DST/llama.framework/llama\" ] || [ \"$SRC/llama\" -nt \"$DST/llama.framework/llama\" ]; then\n    mkdir -p \"$DST\"\n    rsync -a --delete \"$SRC\" \"$DST/\"\n    if [ -n \"$EXPANDED_CODE_SIGN_IDENTITY\" ]; then\n      codesign --force --sign \"$EXPANDED_CODE_SIGN_IDENTITY\" --preserve-metadata=identifier,flags --timestamp=none \"$DST/llama.framework\"\n    fi\n  fi\nfi\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 

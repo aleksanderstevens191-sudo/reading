@@ -64,9 +64,13 @@ targets:
           if [ "$PLATFORM_NAME" = "iphoneos" ]; then
             SRC="$SRCROOT/Vendor/build-apple/llama.xcframework/ios-arm64/llama.framework"
             DST="$TARGET_BUILD_DIR/$FRAMEWORKS_FOLDER_PATH"
-            mkdir -p "$DST"
-            rsync -a --delete "$SRC" "$DST/"
-            if [ -n "$EXPANDED_CODE_SIGN_IDENTITY" ]; then
-              codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" --preserve-metadata=identifier,flags --timestamp=none "$DST/llama.framework"
+            # Copy and sign only when the library is new or changed: redoing it on every
+            # build alters the app after it was signed and breaks its signature.
+            if [ ! -f "$DST/llama.framework/llama" ] || [ "$SRC/llama" -nt "$DST/llama.framework/llama" ]; then
+              mkdir -p "$DST"
+              rsync -a --delete "$SRC" "$DST/"
+              if [ -n "$EXPANDED_CODE_SIGN_IDENTITY" ]; then
+                codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" --preserve-metadata=identifier,flags --timestamp=none "$DST/llama.framework"
+              fi
             fi
           fi
