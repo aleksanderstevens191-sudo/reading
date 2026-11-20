@@ -14,6 +14,7 @@ struct CurlPager: UIViewControllerRepresentable {
     let rtl: Bool
     let compact: Bool                   // artwork: smaller margins, no page numbers
     var spineGap: CGFloat? = nil        // space each page keeps from the spine (the fold on a foldable)
+    var reflow: ReflowLayout? = nil     // Kindle-style text pages instead of PDF page images
     @Binding var spread: Int?           // logical spread index (reading order)
     let renderer: PageRenderer
     let dark: Bool
@@ -21,8 +22,10 @@ struct CurlPager: UIViewControllerRepresentable {
     let aspect: CGFloat
     let onTap: (CGFloat) -> Void        // x position as a fraction of the width
 
+    /// Printed books keep the cover alone on the right; flowing text pairs pages from the start.
+    var coverAlone: Bool { reflow == nil }
     /// Sides of the book. Two-page mode has a blank slot before the cover (and one at the end if needed).
-    var slotCount: Int { two ? ((total + 1) + 1) / 2 * 2 : total }
+    var slotCount: Int { two ? ((total + (coverAlone ? 1 : 0)) + 1) / 2 * 2 : total }
     var spreadCount: Int { two ? slotCount / 2 : total }
 
     /// Virtual = what UIKit sees. Reversed for right-to-left books.
@@ -30,7 +33,7 @@ struct CurlPager: UIViewControllerRepresentable {
     func page(forVirtualSlot v: Int) -> Int? {
         let s = rtl ? slotCount - 1 - v : v
         if !two { return s }
-        let p = s - 1
+        let p = coverAlone ? s - 1 : s
         return (p >= 0 && p < total) ? p : nil
     }
 
@@ -94,7 +97,7 @@ struct CurlPager: UIViewControllerRepresentable {
             let side: PageSlotController.Side = parent.two ? (v % 2 == 0 ? .left : .right) : .single
             let vc = PageSlotController(slot: v, page: parent.page(forVirtualSlot: v), total: parent.total,
                                         renderer: parent.renderer, side: side, compact: parent.compact,
-                                        spineGap: parent.spineGap)
+                                        spineGap: parent.spineGap, reflow: parent.reflow)
             vc.restyle(dark: parent.dark, invert: parent.invert, aspect: parent.aspect)
             vc.zoom = container?.zoomScale ?? 1
             return vc
@@ -254,6 +257,7 @@ final class PageSlotController: UIViewController {
     let side: Side
     let compact: Bool
     let foldGap: CGFloat?
+    let reflow: ReflowLayout?
 
     private var dark = true
     private var invert = true
@@ -267,7 +271,8 @@ final class PageSlotController: UIViewController {
     private var lastKey = ""
     private var renderTask: Task<Void, Never>?
 
-    init(slot: Int, page: Int?, total: Int, renderer: PageRenderer, side: Side, compact: Bool, spineGap: CGFloat? = nil) {
+    init(slot: Int, page: Int?, total: Int, renderer: PageRenderer, side: Side, compact: Bool, spineGap: CGFloat? = nil,
+         reflow: ReflowLayout? = nil) {
         self.slot = slot
         self.page = page
         self.total = total
@@ -275,6 +280,7 @@ final class PageSlotController: UIViewController {
         self.side = side
         self.compact = compact
         self.foldGap = spineGap
+        self.reflow = reflow
         super.init(nibName: nil, bundle: nil)
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -306,7 +312,7 @@ final class PageSlotController: UIViewController {
     private func applyColors() {
         view.backgroundColor = CurlPager.Coordinator.background(dark)
         imageView.layer.shadowColor = UIColor.black.cgColor
-        imageView.layer.shadowOpacity = dark ? 0 : 0.12
+        imageView.layer.shadowOpacity = dark || reflow != nil ? 0 : 0.12   // text sits right on the paper
         imageView.layer.shadowRadius = 10
         imageView.layer.shadowOffset = CGSize(width: 0, height: 4)
         label.textColor = dark ? UIColor(white: 0.56, alpha: 1) : UIColor(white: 0.45, alpha: 1)
@@ -316,6 +322,18 @@ final class PageSlotController: UIViewController {
         super.viewDidLayoutSubviews()
         let b = view.bounds
         guard b.width > 1, b.height > 1 else { return }
+        if let reflow {
+            // Text pages use the exact box the book was laid out for.
+            let r = reflow.rects[side] ?? CGRect(origin: .zero, size: reflow.size)
+            let rect = CGRect(origin: r.origin, size: reflow.size)
+            if rect != pageRect {
+                pageRect = rect
+                imageView.frame = rect
+                label.frame = CGRect(x: rect.minX, y: rect.maxY + 16, width: rect.width, height: 14)
+                render()
+            }
+            return
+        }
         let top: CGFloat = compact ? 10 : 44
         let bottom: CGFloat = compact ? 14 : 54
         let outer: CGFloat = compact ? 8 : (b.width < 520 ? 16 : 56)   // phone-size screens get small margins
@@ -345,6 +363,21 @@ final class PageSlotController: UIViewController {
         let bucket = zoom > 1.4 ? min((zoom * 2).rounded() / 2, 3) : 1
         let scale = min(view.traitCollection.displayScale, 2) * bucket
         let size = pageRect.size
+        if let reflow {
+            let dark = self.dark
+            let key = "text|\(dark)|\(scale)"
+            guard key != lastKey else { return }
+            lastKey = key
+            renderTask?.cancel()
+            renderTask = Task { [weak self] in
+                let img = await Task.detached(priority: .userInitiated) {
+                    reflow.image(page: page, scale: scale, dark: dark)
+                }.value
+                guard !Task.isCancelled, let self, let img else { return }
+                self.imageView.image = img
+            }
+            return
+        }
         let flip = dark && invert
         let key = "\(Int(size.width))x\(Int(size.height))|\(flip)|\(scale)"
         guard key != lastKey else { return }

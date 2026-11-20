@@ -27,6 +27,7 @@ struct Book: Codable, Identifiable, Hashable {
     var addedAt = Date()
     var openedAt: Date?
     var kind: BookKind?
+    var textOffset: Int?       // where you are in the reflowed text (Kindle-style layout)
 
     var resolvedKind: BookKind { kind ?? .novel }
 
@@ -85,6 +86,7 @@ final class Library {
     func remove(_ book: Book) {
         try? FileManager.default.removeItem(at: fileURL(book))
         try? FileManager.default.removeItem(at: coverURL(book))
+        try? FileManager.default.removeItem(at: ReflowSource.cacheURL(book.id))
         books.removeAll { $0.id == book.id }
         save()
     }

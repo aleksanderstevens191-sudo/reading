@@ -21,6 +21,7 @@ the increased-memory entitlements may need a paid developer account.
    (Or Finder → iPad → Files → Reading, drag the .gguf in.)
 
 ## Notes
+- Books are shown Kindle-style by default ("Fit text to screen" in the Aa menu): the text is pulled out of the PDF, rebuilt into paragraphs (running titles and page numbers removed), and laid out at a size you pick, one column per page. "Original pages" shows the PDF as printed. Scanned PDFs with no text layer always show the original pages. The extracted text is cached in `Documents/Text`.
 - iPhone Duo: unfolded, the reader shows two pages with the fold as the book's spine (it reads the fold position from `reservedRegions(kind: .division)`, iOS 27.1+). Folded, the outer screen shows one page.
 - The iPad Pro 2020 (A12Z) GPU is too old for llama.cpp's GPU path, so the model runs on the CPU (`GGML_METAL_DEVICES=0`).
 - The llama.cpp framework has no simulator build: in the simulator the app works but the Explain panel says the AI isn't available.
