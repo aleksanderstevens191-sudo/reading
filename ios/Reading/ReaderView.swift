@@ -13,7 +13,7 @@ struct ReaderView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("darkPages") private var darkPages = true
     @AppStorage("reflow") private var reflowOn = true          // fit the text to the screen, like Kindle
-    @AppStorage("textSize") private var textSize: Double = 21
+    @AppStorage("textSize") private var textSize: Double = 23
 
     @State private var book: Book
     @State private var doc: PDFDocument?
@@ -33,6 +33,7 @@ struct ReaderView: View {
 
     @State private var source: ReflowSource?
     @State private var layout: ReflowLayout?
+    @State private var preparing: Double?      // progress reading a scanned book's text (0…1)
     @State private var anchor = 0              // character offset of the first page on screen (reflowed text)
 
     @State private var outline: [OutlineItem] = []
@@ -106,6 +107,7 @@ struct ReaderView: View {
 
                 header
                 footer
+                if let p = preparing { preparingPill(p) }
                 if showUI { chrome.transition(.opacity) }
             }
             .onAppear {
@@ -166,7 +168,10 @@ struct ReaderView: View {
         }
         .task(id: wantsReflow) {
             guard wantsReflow, source == nil else { return }
-            let s = await ReflowSource.load(bookID: book.id, url: library.fileURL(book), title: book.title)
+            let s = await ReflowSource.load(bookID: book.id, url: library.fileURL(book), title: book.title) { p in
+                Task { @MainActor in if p < 1, source == nil { preparing = max(preparing ?? 0, p) } }
+            }
+            preparing = nil
             // Pick up where you left off: the saved text position if it still matches the saved page.
             source = s   // the change of `reflowing` sets the starting position
         }
@@ -200,7 +205,7 @@ struct ReaderView: View {
     /// True while the reflowed text is still being prepared for this screen.
     private func waiting(_ spec: ReflowSpec?) -> Bool {
         guard wantsReflow else { return false }
-        guard let source else { return true }
+        guard let source else { return false }   // read the original pages meanwhile
         guard source.hasText, let spec else { return false }
         return layout?.key != spec.key
     }
@@ -299,6 +304,22 @@ struct ReaderView: View {
     }
 
     // MARK: Overlays
+
+    /// Shown the first time a scanned book is opened, while its words are read off the pages.
+    private func preparingPill(_ p: Double) -> some View {
+        VStack {
+            Spacer()
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Making the text bigger… \(Int(p * 100))%").font(.footnote).monospacedDigit()
+            }
+            .padding(.horizontal, 14).padding(.vertical, 8)
+            .background(.regularMaterial, in: Capsule())
+            .padding(.bottom, 44)
+        }
+        .allowsHitTesting(false)
+        .transition(.opacity)
+    }
 
     private var header: some View {
         VStack {

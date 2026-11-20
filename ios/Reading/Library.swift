@@ -55,6 +55,10 @@ final class Library {
         if let data = try? Data(contentsOf: Self.indexURL),
            let saved = try? JSONDecoder().decode([Book].self, from: data) {
             books = saved
+            // Tidy titles that are still raw file names.
+            for i in books.indices where books[i].title.range(of: #"^\d{4}\.\d+\."#, options: .regularExpression) != nil {
+                books[i].title = Self.cleanTitle(books[i].title)
+            }
         }
         sort()
     }
@@ -144,7 +148,11 @@ final class Library {
     static func cleanTitle(_ fileName: String) -> String {
         var s = fileName
         if s.lowercased().hasSuffix(".pdf") { s = String(s.dropLast(4)) }
-        return s.replacingOccurrences(of: "_", with: " ")
-            .split(separator: " ").joined(separator: " ")
+        // Archive.org scans are named like "2015.182865.Old-Man-And-The-Sea".
+        s = s.replacingOccurrences(of: #"^\d{4}\.\d+\.?"#, with: "", options: .regularExpression)
+        s = s.replacingOccurrences(of: "_", with: " ")
+        if !s.contains(" ") { s = s.replacingOccurrences(of: "-", with: " ") }
+        let out = s.split(separator: " ").joined(separator: " ")
+        return out.isEmpty ? fileName : out
     }
 }

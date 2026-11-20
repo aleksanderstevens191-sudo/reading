@@ -1,5 +1,6 @@
 import PDFKit
 import UIKit
+import Vision
 
 // Kindle-style reading for PDFs: the words are pulled out of the PDF, rebuilt
 // into paragraphs, and laid out again at a comfortable size that fills the
@@ -14,7 +15,7 @@ struct ReflowPara: Codable {
 
 /// The book's text as paragraphs, cached in Documents/Text/<book id>.json.
 final class ReflowSource: @unchecked Sendable {
-    static let version = 1
+    static let version = 2   // 2: scanned books are read with on-device text recognition
     let paras: [ReflowPara]
     /// Character offset where each paragraph starts in the joined text.
     let offsets: [Int]
@@ -53,14 +54,15 @@ final class ReflowSource: @unchecked Sendable {
     }
 
     /// Loads the cached text, or extracts it from the PDF (first open only).
-    static func load(bookID: String, url: URL, title: String) async -> ReflowSource {
+    static func load(bookID: String, url: URL, title: String,
+                     progress: @escaping @Sendable (Double) -> Void = { _ in }) async -> ReflowSource {
         let cache = cacheURL(bookID)
         if let data = try? Data(contentsOf: cache),
            let s = try? JSONDecoder().decode(Stored.self, from: data), s.version == version {
             return ReflowSource(paras: s.paras)
         }
         let paras = await Task.detached(priority: .userInitiated) {
-            ReflowExtractor.paragraphs(url: url, title: title)
+            ReflowExtractor.paragraphs(url: url, title: title, progress: progress)
         }.value
         try? FileManager.default.createDirectory(at: cache.deletingLastPathComponent(), withIntermediateDirectories: true)
         if let data = try? JSONEncoder().encode(Stored(version: version, paras: paras)) {
@@ -93,23 +95,139 @@ enum ReflowExtractor {
         }
     }
 
+    // MARK: Scanned books
+
+    private final class Pages: @unchecked Sendable {
+        var lines: [[Line]]
+        var done = 0
+        let lock = NSLock()
+        init(_ n: Int) { lines = Array(repeating: [], count: n) }
+    }
+
+    /// Text recognition (on device) for every page, a few pages at a time.
+    static func recognize(url: URL, count: Int, progress: @escaping @Sendable (Double) -> Void) -> [[Line]] {
+        let out = Pages(count)
+        let langs = languages()
+        let workers = max(2, min(ProcessInfo.processInfo.activeProcessorCount - 2, 4))
+        DispatchQueue.concurrentPerform(iterations: workers) { w in
+            guard let doc = CGPDFDocument(url as CFURL) else { return }   // one per thread
+            var i = w
+            while i < count {
+                let ls = autoreleasepool { recognize(doc: doc, index: i, languages: langs) }
+                out.lock.lock()
+                out.lines[i] = ls
+                out.done += 1
+                let d = out.done
+                out.lock.unlock()
+                progress(Double(d) / Double(count))
+                i += workers
+            }
+        }
+        return out.lines
+    }
+
+    /// The reader's own languages, so the recogniser doesn't guess (it turns smudges into "ằ").
+    static func languages() -> [String] {
+        let req = VNRecognizeTextRequest()
+        req.recognitionLevel = .accurate
+        let supported = Set((try? req.supportedRecognitionLanguages()) ?? [])
+        let mine = Locale.preferredLanguages.filter { supported.contains($0) }
+        return mine.isEmpty ? ["en-US"] : mine
+    }
+
+    static func recognize(doc: CGPDFDocument, index: Int, languages: [String]) -> [Line] {
+        guard let page = doc.page(at: index + 1) else { return [] }
+        let box = page.getBoxRect(.cropBox)
+        let turned = (page.rotationAngle / 90) % 2 != 0
+        let W = turned ? box.height : box.width, H = turned ? box.width : box.height
+        guard W > 1, H > 1 else { return [] }
+        let scale = 2000 / max(W, H)
+        let pw = Int(W * scale), ph = Int(H * scale)
+        guard let ctx = CGContext(data: nil, width: pw, height: ph, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue)
+        else { return [] }
+        ctx.setFillColor(gray: 1, alpha: 1)
+        ctx.fill(CGRect(x: 0, y: 0, width: pw, height: ph))
+        ctx.scaleBy(x: scale, y: scale)
+        ctx.concatenate(page.getDrawingTransform(.cropBox, rect: CGRect(x: 0, y: 0, width: W, height: H),
+                                                 rotate: 0, preserveAspectRatio: true))
+        ctx.drawPDFPage(page)
+        guard let img = ctx.makeImage() else { return [] }
+
+        let req = VNRecognizeTextRequest()
+        req.recognitionLevel = .accurate
+        req.usesLanguageCorrection = true
+        req.recognitionLanguages = languages
+        do { try VNImageRequestHandler(cgImage: img).perform([req]) } catch { return [] }
+        return (req.results ?? []).compactMap { o -> Line? in
+            let t = cleanRecognized(o.topCandidates(1).first?.string ?? "")
+            guard !t.isEmpty else { return nil }
+            let b = o.boundingBox   // 0…1, origin bottom-left
+            return Line(text: t, minX: b.minX * W, maxX: b.maxX * W, top: (1 - b.maxY) * H, pageH: H)
+        }
+        .sorted { abs($0.top - $1.top) > 3 ? $0.top < $1.top : $0.minX < $1.minX }
+    }
+
+    /// Drops scan specks the recogniser reads as letters at the end of a line ("record_ằ").
+    static func cleanRecognized(_ s: String) -> String {
+        var t = s.replacingOccurrences(of: "_", with: "")
+        let latin = t.unicodeScalars.filter { $0.value < 0x250 }.count
+        // In a Latin-script line, the last word is cut at the first odd letter ("himạẠại" → "him").
+        if latin * 2 > t.unicodeScalars.count {
+            let scalars = Array(t.unicodeScalars)
+            let wordStart = (scalars.lastIndex { $0 == " " }).map { $0 + 1 } ?? 0
+            if let bad = scalars[wordStart...].firstIndex(where: { $0.value >= 0x250 && $0.properties.isAlphabetic }) {
+                var u = String.UnicodeScalarView()
+                u.append(contentsOf: scalars[..<bad])
+                t = String(u)
+            }
+        }
+        return t.trimmingCharacters(in: .whitespaces)
+    }
+
     /// Letters only, lowercased: "The Old Man and the Sea  11" → "theoldmanandthesea".
     static func key(_ s: String) -> String { String(s.lowercased().filter(\.isLetter)) }
+
+    /// A running title, allowing for a couple of misread letters on scans.
+    static func isRunning(_ k: String, _ running: Set<String>) -> Bool {
+        if running.contains(k) { return true }
+        guard k.count >= 8 else { return false }
+        return running.contains { r in abs(r.count - k.count) <= 2 && distance(r, k) <= max(2, r.count / 8) }
+    }
+
+    static func distance(_ a: String, _ b: String) -> Int {
+        let a = Array(a), b = Array(b)
+        var row = Array(0...b.count)
+        for i in 1...max(a.count, 1) where !a.isEmpty {
+            var prev = row[0]; row[0] = i
+            for j in stride(from: 1, through: b.count, by: 1) {
+                let cur = row[j]
+                row[j] = min(row[j] + 1, row[j - 1] + 1, prev + (a[i - 1] == b[j - 1] ? 0 : 1))
+                prev = cur
+            }
+        }
+        return row[b.count]
+    }
 
     static func isPageNumber(_ s: String) -> Bool {
         s.range(of: #"^[\s\-–—.\[\]()]*\d{1,4}[\s\-–—.\[\]()]*$"#, options: .regularExpression) != nil
     }
 
-    static func paragraphs(url: URL, title: String) -> [ReflowPara] {
+    static func paragraphs(url: URL, title: String, progress: @escaping @Sendable (Double) -> Void) -> [ReflowPara] {
         guard let doc = PDFDocument(url: url) else { return [] }
-        let pages = (0..<doc.pageCount).map { i in doc.page(at: i).map(lines(of:)) ?? [] }
+        var pages = (0..<doc.pageCount).map { i in doc.page(at: i).map(lines(of:)) ?? [] }
+        // A scan has no text inside: read the words off the page images instead.
+        let chars = pages.reduce(0) { $0 + $1.reduce(0) { $0 + $1.text.count } }
+        if chars < doc.pageCount * 100 {
+            pages = recognize(url: url, count: doc.pageCount, progress: progress)
+        }
 
         // Running heads and footers (book or chapter title repeated at the top
         // or bottom of most pages) and page numbers aren't part of the text.
         var counts: [String: Int] = [:]
         for ls in pages {
             var seen = Set<String>()
-            for l in ls where l.top < l.pageH * 0.12 || l.top > l.pageH * 0.85 {
+            for l in ls where l.top < l.pageH * 0.15 || l.top > l.pageH * 0.85 {
                 let k = key(l.text)
                 if k.count >= 3, seen.insert(k).inserted { counts[k, default: 0] += 1 }
             }
@@ -144,9 +262,10 @@ enum ReflowExtractor {
 
         for (p, all) in pages.enumerated() {
             let ls = all.filter { l in
-                let edge = l.top < l.pageH * 0.12 || l.top > l.pageH * 0.85
+                let edge = l.top < l.pageH * 0.15 || l.top > l.pageH * 0.85
                 if edge && isPageNumber(l.text) { return false }
-                if edge && running.contains(key(l.text)) { return false }
+                if edge && l.text.count <= 4 { return false }    // page numbers misread on scans ("I I")
+                if edge && isRunning(key(l.text), running) { return false }
                 return true
             }
             guard !ls.isEmpty else { continue }
@@ -161,6 +280,7 @@ enum ReflowExtractor {
             let lineH = gaps.isEmpty ? 14 : gaps[gaps.count / 2]
 
             var prevIndent: CGFloat = 0
+            var prevStarted = false   // the previous line began a paragraph
             for (i, l) in ls.enumerated() {
                 let indent = l.minX - left
                 let trailing = right - l.maxX
@@ -176,15 +296,20 @@ enum ReflowExtractor {
                     out.append(ReflowPara(text: l.text, heading: true, page: p))
                     prevShort = true
                     prevIndent = 0
+                    prevStarted = false
                     continue
                 }
-                // A line starting in lowercase carries on the sentence, even after a short line.
+                // A line starting in lowercase carries on the sentence, even after a short line or a drop cap.
                 let continues = l.text.first?.isLowercase == true && !indented
-                let newPara = gap > lineH * 1.6 || (!continues && (prevShort || (indented && prevIndent <= bodyW * 0.02)))
+                // An indented line starts a paragraph, unless it follows an indented line that
+                // wasn't a paragraph start (a block quote).
+                let indentStarts = indented && (prevIndent <= bodyW * 0.02 || prevStarted)
+                let newPara = gap > lineH * 3 || (!continues && (gap > lineH * 1.6 || prevShort || indentStarts))
                 if newPara { flush() }
                 append(l.text, page: p)
                 prevShort = trailing > bodyW * 0.12
                 prevIndent = indent
+                prevStarted = newPara
             }
         }
         flush()
